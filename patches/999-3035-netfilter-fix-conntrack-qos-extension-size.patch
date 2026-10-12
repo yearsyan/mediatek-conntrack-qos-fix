@@ -1,0 +1,56 @@
+Subject: [PATCH] netfilter: fix conntrack QoS extension allocation
+
+The MediaTek DSCP-learning code adds NF_CT_EXT_QOS without registering
+its payload size in nf_ct_ext_type_len[]. The zero-length entry allows
+later conntrack extensions to reuse its offset, so QoS writes can
+corrupt their storage. Forwarded TCP connections can consequently be
+reset when flow offload and QoS learning are enabled.
+
+Register the QoS payload size and include it in total_extension_size(),
+which feeds the compile-time size bound check. Return NULL on allocation
+failure before attempting to initialize the extension.
+
+---
+ include/net/netfilter/nf_conntrack_qos.h | 4 +++-
+ net/netfilter/nf_conntrack_extend.c      | 3 +++
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+--- a/include/net/netfilter/nf_conntrack_qos.h
++++ b/include/net/netfilter/nf_conntrack_qos.h
+@@ -34,7 +34,9 @@ struct nf_conn_qos *nf_ct_qos_ext_add(st
+ 
+ 	qos = nf_ct_ext_add(ct, NF_CT_EXT_QOS, gfp);
+-	if (!qos)
++	if (!qos) {
+ 		pr_debug("failed to add qos extension area");
++		return NULL;
++	}
+ 
+ 	memset(qos->tos, 0, sizeof(qos->tos));
+ 
+--- a/net/netfilter/nf_conntrack_extend.c
++++ b/net/netfilter/nf_conntrack_extend.c
+@@ -15,6 +15,7 @@
+ 
+ #include <net/netfilter/nf_conntrack_helper.h>
+ #include <net/netfilter/nf_conntrack_acct.h>
++#include <net/netfilter/nf_conntrack_qos.h>
+ #include <net/netfilter/nf_conntrack_seqadj.h>
+ #include <net/netfilter/nf_conntrack_ecache.h>
+ #include <net/netfilter/nf_conntrack_zones.h>
+@@ -36,6 +37,7 @@ static const u8 nf_ct_ext_type_len[NF_CT
+ #endif
+ 	[NF_CT_EXT_SEQADJ] = sizeof(struct nf_conn_seqadj),
+ 	[NF_CT_EXT_ACCT] = sizeof(struct nf_conn_acct),
++	[NF_CT_EXT_QOS] = sizeof(struct nf_conn_qos),
+ #ifdef CONFIG_NF_CONNTRACK_EVENTS
+ 	[NF_CT_EXT_ECACHE] = sizeof(struct nf_conntrack_ecache),
+ #endif
+@@ -66,6 +68,7 @@ static __always_inline unsigned int tota
+ #endif
+ 		+ sizeof(struct nf_conn_seqadj)
+ 		+ sizeof(struct nf_conn_acct)
++		+ sizeof(struct nf_conn_qos)
+ #ifdef CONFIG_NF_CONNTRACK_EVENTS
+ 		+ sizeof(struct nf_conntrack_ecache)
+ #endif
